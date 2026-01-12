@@ -47,26 +47,6 @@ with st.sidebar:
 # Main content area
 uploaded_file = st.file_uploader("Upload Contract (PDF, DOCX, TXT)", type=["pdf", "docx", "txt"])
 
-# Semantic search
-with st.expander("🔎 Search across uploaded documents"):
-    query = st.text_input("Enter search query")
-    top_k = st.slider("Results", 1, 10, 5)
-    if st.button("Search"):
-        if query.strip():
-            try:
-                results = analyzer.search(query, k=top_k)
-                if not results:
-                    st.info("No matches found.")
-                else:
-                    for idx, r in enumerate(results, 1):
-                        st.markdown(f"**{idx}. Doc:** {r.get('document_id','')}")
-                        st.write(r.get("text","")[:400] + "...")
-                        st.divider()
-            except Exception as e:
-                st.error(f"Search error: {e}")
-        else:
-            st.warning("Enter a query first.")
-
 # Display selected history document
 if 'selected_doc_id' in st.session_state:
     doc_id = st.session_state.selected_doc_id
@@ -100,6 +80,7 @@ if 'selected_doc_id' in st.session_state:
 
 # Upload and analyze new document
 if uploaded_file:
+    available_roles = ["compliance", "finance", "legal", "operations"]
     with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp_file:
         tmp_file.write(uploaded_file.getvalue())
         tmp_path = tmp_file.name
@@ -107,8 +88,22 @@ if uploaded_file:
     if st.button("Analyze Contract", type="primary"):
         with st.spinner("Analyzing with AI agents..."):
             try:
-                document_id = analyzer.upload_document(tmp_path)
-                results = analyzer.analyze_contract(document_id)
+                document_id = analyzer.upload_document(tmp_path, skip_indexing=True)
+                doc_info = analyzer.documents[document_id]
+                parsed = analyzer.parser.parse_document(doc_info["file_path"])
+                full_text = parsed["text"]
+                condensed = analyzer.build_fast_context(full_text, max_chars=4000)
+                roles = available_roles
+                fast_results = analyzer.orchestrator.analyze_contract_parallel(condensed, roles)
+                results = {
+                    "success": True,
+                    "document_id": document_id,
+                    "domain": None,
+                    "analyses": fast_results.get("analyses", {}),
+                    "coordination_messages": fast_results.get("coordination_messages", []),
+                    "completed_agents": fast_results.get("completed_agents", []),
+                    "planning_info": {}
+                }
                 
                 # Store in history
                 st.session_state.document_history.insert(0, {

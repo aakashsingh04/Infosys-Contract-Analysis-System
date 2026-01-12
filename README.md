@@ -81,33 +81,7 @@ python api.py
 - `GET /api/v1/documents` - List all uploaded documents
 - `GET /api/v1/documents/{document_id}` - Get document information
 
-### Example API Usage
 
-```python
-import requests
-
-# Upload a contract
-with open("contract.pdf", "rb") as f:
-    response = requests.post(
-        "http://localhost:8000/api/v1/upload",
-        files={"file": f}
-    )
-    doc_id = response.json()["document_id"]
-
-# Classify domain
-response = requests.post(
-    "http://localhost:8000/api/v1/classify",
-    params={"document_id": doc_id}
-)
-domain = response.json()["domain"]
-
-# Analyze contract
-response = requests.post(
-    "http://localhost:8000/api/v1/analyze",
-    params={"document_id": doc_id}
-)
-results = response.json()
-```
 
 ## Validation
 

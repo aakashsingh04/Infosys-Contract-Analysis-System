@@ -78,7 +78,7 @@ class ContractAnalyzer:
                 self.vector_store = _MemoryStore()
                 self.vector_store_type = "memory"
     
-    def upload_document(self, file_path: str, document_id: Optional[str] = None) -> str:
+    def upload_document(self, file_path: str, document_id: Optional[str] = None, skip_indexing: bool = False) -> str:
         """
         Upload and process a contract document.
         
@@ -97,21 +97,22 @@ class ContractAnalyzer:
         text = parsed["text"]
         metadata = parsed["metadata"]
         
-        # Chunk the text for metadata
-        chunks = self.parser.chunk_text(text, chunk_size=1000, chunk_overlap=200)
-        
-        # Store vectors
-        texts = [c["text"] for c in chunks]
-        metas = [{**metadata, "chunk_index": c["chunk_index"], "document_id": document_id} for c in chunks]
-        self.vector_store.add_texts(texts=texts, metadatas=metas, ids=[f"{document_id}_{c['chunk_index']}" for c in chunks])
-        if self.vector_store_type == "chroma":
-            self.vector_store.persist()
+        if not skip_indexing:
+            chunks = self.parser.chunk_text(text, chunk_size=1000, chunk_overlap=200)
+            texts = [c["text"] for c in chunks]
+            metas = [{**metadata, "chunk_index": c["chunk_index"], "document_id": document_id} for c in chunks]
+            self.vector_store.add_texts(texts=texts, metadatas=metas, ids=[f"{document_id}_{c['chunk_index']}" for c in chunks])
+            if self.vector_store_type == "chroma":
+                self.vector_store.persist()
+            num_chunks = len(chunks)
+        else:
+            num_chunks = 0
 
         # Store document metadata
         self.documents[document_id] = {
             "file_path": file_path,
             "metadata": metadata,
-            "num_chunks": len(chunks),
+            "num_chunks": num_chunks,
             "text_length": len(text)
         }
         
@@ -199,18 +200,39 @@ class ContractAnalyzer:
             "coordination_points": planning_info.get("coordination_points", [])
         }
 
-    def search(self, query: str, k: int = 5) -> List[Dict[str, str]]:
-        """Semantic search across stored documents."""
-        results = self.vector_store.similarity_search(query, k=k)
-        out = []
-        for r in results:
-            meta = r.metadata or {}
-            out.append({
-                "document_id": meta.get("document_id", ""),
-                "chunk_index": meta.get("chunk_index", ""),
-                "text": r.page_content
-            })
-        return out
+    
+    def build_fast_context(self, text: str, max_chars: int = 4000) -> str:
+        lower = text.lower()
+        keywords = [
+            "gdpr", "hipaa", "regulatory", "compliance", "data protection", "export control", "confidentiality",
+            "payment terms", "pricing", "late fees", "penalties", "pricing mechanism", "budget", "invoice",
+            "indemnification", "liability", "intellectual property", "governing law", "dispute", "termination", "warranty",
+            "service level", "sla", "delivery", "timeline", "acceptance", "change management", "performance", "metrics"
+        ]
+        segments = []
+        seen = set()
+        for kw in keywords:
+            start = 0
+            k = kw.lower()
+            while True:
+                idx = lower.find(k, start)
+                if idx == -1:
+                    break
+                s = max(0, idx - 400)
+                e = min(len(text), idx + 400)
+                seg = text[s:e].strip()
+                if seg and seg not in seen:
+                    segments.append(seg)
+                    seen.add(seg)
+                start = idx + len(k)
+                if len("".join(segments)) >= max_chars * 2:
+                    break
+        if not segments:
+            return text[:max_chars]
+        condensed = "\n\n".join(segments)
+        if len(condensed) > max_chars:
+            condensed = condensed[:max_chars]
+        return condensed
 
     def extract_clauses_parallel(self, document_id: str, domains: Optional[List[str]] = None, k: int = 5) -> Dict[str, List[Dict]]:
         """Extract domain-specific clauses in parallel using vector search."""
